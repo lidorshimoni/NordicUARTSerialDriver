@@ -21,8 +21,8 @@ class NordicUARTSerialDriver:
     """
     This class is a handles Nordic UART Service connections just like a serial port.
     """
-    def __init__(self, address, uart_uuid=None, rx_uuid=None, tx_uuid=None):
-        self.address=address
+    def __init__(self, mac_address, uart_uuid=None, rx_uuid=None, tx_uuid=None):
+        self.mac_address=mac_address
         
         self.rx_flag=False
         self.device = None
@@ -41,7 +41,7 @@ class NordicUARTSerialDriver:
         # Wait for thread to start.
         self._bleak_thread_ready.wait()
 
-        self.open(self.address)
+        self.open(self.mac_address)
         
         nus = self.device.services.get_service(self.UART_SERVICE_UUID)
         self.max_write_without_response_size = nus.get_characteristic(self.UART_RX_CHAR_UUID).max_write_without_response_size
@@ -53,8 +53,7 @@ class NordicUARTSerialDriver:
         self._bleak_loop.run_forever()
     
     def _close_bleak_loop(self, _: BleakClient):
-        self._bleak_loop.stop()
-        self._bleak_loop.close()
+        self.disconnect()
 
     def await_bleak(self, coro, timeout=None):
         """Call an async routine in the bleak thread from sync code, and await its result."""
@@ -62,28 +61,29 @@ class NordicUARTSerialDriver:
         future = asyncio.run_coroutine_threadsafe(coro, self._bleak_loop)
         return future.result(timeout)
 
-    def open(self, address=None):
-        if address is None:
+    def open(self, mac_address=None):
+        if mac_address is None:
             raise NotImplemented()
             ble_device = self.await_bleak(BleakScanner.find_device_by_filter(self.match_nus_uuid, timeout=3))
         else:
-            ble_device = self.await_bleak(BleakScanner.find_device_by_address(address))
+            ble_device = self.await_bleak(BleakScanner.find_device_by_address(mac_address))
 
         if ble_device is None:
             raise Exception("No matching device found, you may need to edit match_nus_uuid().")
-        self.device = BleakClient(address_or_ble_device=ble_device)
+        
+        self.device = BleakClient(address_or_ble_device=ble_device, disconnected_callback=self._close_bleak_loop)
         self.await_bleak(self.device.connect())
-
         self.await_bleak(self.device.start_notify(self.UART_TX_CHAR_UUID, self.handle_rx))
-        self.await_bleak(self.device.set_disconnected_callback(self._close_bleak_loop))
 
     def close(self):
-        self.await_bleak(self.device.disconnect())
+        self.disconnect()
 
-    def read(self):
+    def read(self, length=None):
         if not self.rx_flag:
             return
         self.rx_flag=False
+        if length:
+            result = self.rx_queue[:length if length >= len(self.rx_queue) else len(self.rx_queue)]
         result = self.rx_queue
         self.rx_queue = b''
         return result
@@ -101,3 +101,11 @@ class NordicUARTSerialDriver:
     def handle_rx(self, char: BleakGATTCharacteristic, data: bytearray):
         self.rx_queue += bytes(data)
         self.rx_flag=True
+
+    def disconnect(self) -> None:
+        """Disconnects from the remote peripheral. Does nothing if already disconnected."""
+        self.await_bleak(self._disconnect_async())
+
+    async def _disconnect_async(self) -> None:
+        """Disconnects from the remote peripheral. Does nothing if already disconnected."""
+        await self.device.disconnect()
