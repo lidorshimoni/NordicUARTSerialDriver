@@ -104,7 +104,10 @@ class NordicUARTSerialDriver:
 
     def disconnect(self) -> None:
         """Disconnects from the remote peripheral. Does nothing if already disconnected."""
-        self.await_bleak(self._disconnect_async())
+        try:
+            self.await_bleak(self._disconnect_async(), timeout=0.3)
+        except:
+            pass
 
     async def _disconnect_async(self) -> None:
         """Disconnects from the remote peripheral. Does nothing if already disconnected."""
